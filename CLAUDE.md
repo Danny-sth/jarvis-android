@@ -127,3 +127,27 @@ Response: { "text": "...", "audio": "base64 OGG" }
 3. **VAD silence timeout**: 2 seconds. Min recording: 0.5s, max: 10s
 4. **Audio format**: Recording is 16kHz mono PCM → WAV. Response is OGG.
 5. **Lifecycle**: Service binds on ON_START, unbinds+stops on ON_STOP (app-only mode)
+
+## Extended Documentation
+
+See `.claude/` directory for detailed docs and skills:
+
+```
+.claude/
+├── CLAUDE.md              # Quick reference
+├── NOTES.md               # Session memory, decisions
+├── settings.json          # Hooks configuration
+├── docs/
+│   ├── architecture.md    # Full tech stack, state machine
+│   ├── services.md        # Android services explained
+│   └── dependencies.md    # Libraries reference
+├── skills/
+│   ├── build-deploy.md    # Build, install, logs
+│   ├── debug-voice.md     # Voice pipeline debugging
+│   ├── add-feature.md     # Adding new functionality
+│   └── troubleshooting.md # Common errors and fixes
+└── specs/
+    ├── plans/             # Plan templates
+    ├── requirements/      # Requirements templates
+    └── tasks/             # Task templates
+```
