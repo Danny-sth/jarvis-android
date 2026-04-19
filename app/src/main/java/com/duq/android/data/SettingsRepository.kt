@@ -1,28 +1,42 @@
 package com.duq.android.data
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "duq_settings")
 
+/**
+ * Repository for app settings and authentication tokens.
+ * Security: Tokens are stored in EncryptedSharedPreferences.
+ * Non-sensitive settings use DataStore.
+ */
 class SettingsRepository(private val context: Context) {
 
-    private object PreferencesKeys {
-        // Keycloak tokens
-        val ACCESS_TOKEN = stringPreferencesKey("access_token")
-        val REFRESH_TOKEN = stringPreferencesKey("refresh_token")
-        val ID_TOKEN = stringPreferencesKey("id_token")
-        val TOKEN_EXPIRES_AT = longPreferencesKey("token_expires_at")
+    companion object {
+        private const val TAG = "SettingsRepository"
+        private const val ENCRYPTED_PREFS_NAME = "duq_secure_prefs"
 
-        // User info
+        // Encrypted preferences keys (for tokens)
+        private const val KEY_ACCESS_TOKEN = "access_token"
+        private const val KEY_REFRESH_TOKEN = "refresh_token"
+        private const val KEY_ID_TOKEN = "id_token"
+        private const val KEY_TOKEN_EXPIRES_AT = "token_expires_at"
+    }
+
+    private object PreferencesKeys {
+        // User info (DataStore - less sensitive)
         val USER_SUB = stringPreferencesKey("user_sub")
         val USER_EMAIL = stringPreferencesKey("user_email")
         val USER_NAME = stringPreferencesKey("user_name")
@@ -32,29 +46,49 @@ class SettingsRepository(private val context: Context) {
         val PORCUPINE_API_KEY = stringPreferencesKey("porcupine_api_key")
     }
 
-    // Access token flow
-    val accessToken: Flow<String> = context.dataStore.data
-        .map { preferences ->
-            preferences[PreferencesKeys.ACCESS_TOKEN] ?: ""
-        }
+    /**
+     * Encrypted SharedPreferences for secure token storage.
+     * Uses AES256 encryption with MasterKey from Android Keystore.
+     */
+    private val encryptedPrefs: SharedPreferences by lazy {
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
 
-    // Refresh token flow
-    val refreshToken: Flow<String> = context.dataStore.data
-        .map { preferences ->
-            preferences[PreferencesKeys.REFRESH_TOKEN] ?: ""
+            EncryptedSharedPreferences.create(
+                context,
+                ENCRYPTED_PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create EncryptedSharedPreferences, falling back to regular prefs", e)
+            // Fallback to regular SharedPreferences if encryption fails (shouldn't happen)
+            context.getSharedPreferences(ENCRYPTED_PREFS_NAME, Context.MODE_PRIVATE)
         }
+    }
 
-    // ID token flow
-    val idToken: Flow<String> = context.dataStore.data
-        .map { preferences ->
-            preferences[PreferencesKeys.ID_TOKEN] ?: ""
-        }
+    // Access token flow (from encrypted storage)
+    val accessToken: Flow<String> = flow {
+        emit(encryptedPrefs.getString(KEY_ACCESS_TOKEN, "") ?: "")
+    }
 
-    // Token expiration
-    val tokenExpiresAt: Flow<Long> = context.dataStore.data
-        .map { preferences ->
-            preferences[PreferencesKeys.TOKEN_EXPIRES_AT] ?: 0L
-        }
+    // Refresh token flow (from encrypted storage)
+    val refreshToken: Flow<String> = flow {
+        emit(encryptedPrefs.getString(KEY_REFRESH_TOKEN, "") ?: "")
+    }
+
+    // ID token flow (from encrypted storage)
+    val idToken: Flow<String> = flow {
+        emit(encryptedPrefs.getString(KEY_ID_TOKEN, "") ?: "")
+    }
+
+    // Token expiration (from encrypted storage)
+    val tokenExpiresAt: Flow<Long> = flow {
+        emit(encryptedPrefs.getLong(KEY_TOKEN_EXPIRES_AT, 0L))
+    }
 
     // User info
     val userSub: Flow<String> = context.dataStore.data
@@ -82,45 +116,43 @@ class SettingsRepository(private val context: Context) {
             preferences[PreferencesKeys.PORCUPINE_API_KEY] ?: ""
         }
 
-    val isAuthenticated: Flow<Boolean> = context.dataStore.data
-        .map { preferences ->
-            val token = preferences[PreferencesKeys.ACCESS_TOKEN] ?: ""
-            token.isNotBlank()
-        }
+    val isAuthenticated: Flow<Boolean> = flow {
+        val token = encryptedPrefs.getString(KEY_ACCESS_TOKEN, "") ?: ""
+        emit(token.isNotBlank())
+    }
 
-    val hasValidSettings: Flow<Boolean> = context.dataStore.data
-        .map { preferences ->
-            val token = preferences[PreferencesKeys.ACCESS_TOKEN] ?: ""
-            val apiKey = preferences[PreferencesKeys.PORCUPINE_API_KEY] ?: ""
-            token.isNotBlank() && apiKey.isNotBlank()
-        }
+    val hasValidSettings: Flow<Boolean> = flow {
+        val token = encryptedPrefs.getString(KEY_ACCESS_TOKEN, "") ?: ""
+        val apiKey = context.dataStore.data.first()[PreferencesKeys.PORCUPINE_API_KEY] ?: ""
+        emit(token.isNotBlank() && apiKey.isNotBlank())
+    }
 
     /**
-     * Get current access token synchronously
+     * Get current access token synchronously (from encrypted storage)
      */
     suspend fun getAccessToken(): String {
-        return accessToken.first()
+        return encryptedPrefs.getString(KEY_ACCESS_TOKEN, "") ?: ""
     }
 
     /**
-     * Get current refresh token synchronously
+     * Get current refresh token synchronously (from encrypted storage)
      */
     suspend fun getRefreshToken(): String {
-        return refreshToken.first()
+        return encryptedPrefs.getString(KEY_REFRESH_TOKEN, "") ?: ""
     }
 
     /**
-     * Get current ID token synchronously
+     * Get current ID token synchronously (from encrypted storage)
      */
     suspend fun getIdToken(): String {
-        return idToken.first()
+        return encryptedPrefs.getString(KEY_ID_TOKEN, "") ?: ""
     }
 
     /**
-     * Get token expiration time
+     * Get token expiration time (from encrypted storage)
      */
     suspend fun getTokenExpiresAt(): Long {
-        return tokenExpiresAt.first()
+        return encryptedPrefs.getLong(KEY_TOKEN_EXPIRES_AT, 0L)
     }
 
     /**
@@ -132,7 +164,8 @@ class SettingsRepository(private val context: Context) {
     }
 
     /**
-     * Save Keycloak auth tokens
+     * Save Keycloak auth tokens (to encrypted storage)
+     * Security: Uses EncryptedSharedPreferences with AES256 encryption
      */
     suspend fun saveAuthTokens(
         accessToken: String,
@@ -140,27 +173,31 @@ class SettingsRepository(private val context: Context) {
         idToken: String?,
         expiresAt: Long
     ) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.ACCESS_TOKEN] = accessToken
-            refreshToken?.let { preferences[PreferencesKeys.REFRESH_TOKEN] = it }
-            idToken?.let { preferences[PreferencesKeys.ID_TOKEN] = it }
-            preferences[PreferencesKeys.TOKEN_EXPIRES_AT] = expiresAt
-        }
+        encryptedPrefs.edit()
+            .putString(KEY_ACCESS_TOKEN, accessToken)
+            .apply {
+                refreshToken?.let { putString(KEY_REFRESH_TOKEN, it) }
+                idToken?.let { putString(KEY_ID_TOKEN, it) }
+            }
+            .putLong(KEY_TOKEN_EXPIRES_AT, expiresAt)
+            .apply()
     }
 
     /**
-     * Update access token (after refresh)
+     * Update access token after refresh (to encrypted storage)
      */
     suspend fun updateAccessToken(
         accessToken: String,
         refreshToken: String?,
         expiresAt: Long
     ) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.ACCESS_TOKEN] = accessToken
-            refreshToken?.let { preferences[PreferencesKeys.REFRESH_TOKEN] = it }
-            preferences[PreferencesKeys.TOKEN_EXPIRES_AT] = expiresAt
-        }
+        encryptedPrefs.edit()
+            .putString(KEY_ACCESS_TOKEN, accessToken)
+            .apply {
+                refreshToken?.let { putString(KEY_REFRESH_TOKEN, it) }
+            }
+            .putLong(KEY_TOKEN_EXPIRES_AT, expiresAt)
+            .apply()
     }
 
     /**
@@ -191,13 +228,19 @@ class SettingsRepository(private val context: Context) {
 
     /**
      * Clear all auth data (logout)
+     * Clears both encrypted token storage and user info from DataStore
      */
     suspend fun clearAuth() {
+        // Clear encrypted tokens
+        encryptedPrefs.edit()
+            .remove(KEY_ACCESS_TOKEN)
+            .remove(KEY_REFRESH_TOKEN)
+            .remove(KEY_ID_TOKEN)
+            .remove(KEY_TOKEN_EXPIRES_AT)
+            .apply()
+
+        // Clear user info from DataStore
         context.dataStore.edit { preferences ->
-            preferences.remove(PreferencesKeys.ACCESS_TOKEN)
-            preferences.remove(PreferencesKeys.REFRESH_TOKEN)
-            preferences.remove(PreferencesKeys.ID_TOKEN)
-            preferences.remove(PreferencesKeys.TOKEN_EXPIRES_AT)
             preferences.remove(PreferencesKeys.USER_SUB)
             preferences.remove(PreferencesKeys.USER_EMAIL)
             preferences.remove(PreferencesKeys.USER_NAME)

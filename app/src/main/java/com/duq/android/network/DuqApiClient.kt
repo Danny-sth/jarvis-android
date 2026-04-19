@@ -198,7 +198,7 @@ class DuqApiClient : VoiceApiClientInterface {
         Log.d(TAG, "Audio file: ${audioFile.name}")
         Log.d(TAG, "File size: ${audioFile.length()} bytes (${audioFile.length() / 1024}KB)")
         Log.d(TAG, "URL: $BASE_URL/api/voice")
-        Log.d(TAG, "Auth token: ${authToken.take(20)}...")
+        // Security: Don't log auth tokens
 
         val mediaType = "audio/wav".toMediaType()
         val requestBody = MultipartBody.Builder()

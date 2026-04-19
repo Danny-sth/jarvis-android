@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
-import androidx.activity.result.ActivityResultLauncher
 import com.duq.android.config.AppConfig
 import com.duq.android.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -13,9 +12,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.openid.appauth.*
+import okhttp3.FormBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,6 +36,15 @@ class KeycloakAuthManager @Inject constructor(
 
     // CoroutineScope for async callbacks - prevents runBlocking ANR issues
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // OkHttp client for HTTP requests (replaces HttpURLConnection)
+    private val httpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(AppConfig.AUTH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(AppConfig.AUTH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .writeTimeout(AppConfig.AUTH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     private val prefs by lazy {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -80,7 +90,7 @@ class KeycloakAuthManager @Inject constructor(
         // Store the code verifier for later use in token exchange
         authRequest.codeVerifier?.let { verifier ->
             prefs.edit().putString(KEY_CODE_VERIFIER, verifier).apply()
-            Log.d(TAG, "Stored code verifier: ${verifier.take(10)}...")
+            // Security: Don't log code verifier
         }
 
         return authService.getAuthorizationRequestIntent(authRequest)
@@ -142,10 +152,7 @@ class KeycloakAuthManager @Inject constructor(
                 when {
                     tokenResponse != null -> {
                         Log.d(TAG, "Token exchange successful")
-                        Log.d(TAG, "Access token: ${tokenResponse.accessToken?.take(20)}...")
-                        Log.d(TAG, "Refresh token present: ${tokenResponse.refreshToken != null}")
-                        Log.d(TAG, "ID token present: ${tokenResponse.idToken != null}")
-                        Log.d(TAG, "Expires at: ${tokenResponse.accessTokenExpirationTime}")
+                        // Security: Don't log token values
 
                         // Use scope.launch instead of runBlocking to avoid ANR
                         scope.launch {
@@ -231,6 +238,7 @@ class KeycloakAuthManager @Inject constructor(
 
     /**
      * Exchanges authorization code for tokens manually (with PKCE support)
+     * Security: Uses OkHttp instead of HttpURLConnection for better security
      */
     suspend fun exchangeCodeForTokens(code: String): Result<TokenResponse> = withContext(Dispatchers.IO) {
         try {
@@ -240,30 +248,27 @@ class KeycloakAuthManager @Inject constructor(
                 return@withContext Result.failure(Exception("No code verifier found"))
             }
 
-            val url = URL(KeycloakConfig.TOKEN_ENDPOINT.toString())
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            connection.doOutput = true
-            connection.connectTimeout = AppConfig.AUTH_TIMEOUT_MS.toInt()
-            connection.readTimeout = AppConfig.AUTH_TIMEOUT_MS.toInt()
+            // Build form body with PKCE code_verifier
+            val formBody = FormBody.Builder()
+                .add("grant_type", "authorization_code")
+                .add("client_id", KeycloakConfig.CLIENT_ID)
+                .add("code", code)
+                .add("redirect_uri", KeycloakConfig.REDIRECT_URI)
+                .add("code_verifier", codeVerifier)
+                .build()
 
-            // Build form data with PKCE code_verifier
-            val formData = buildString {
-                append("grant_type=authorization_code")
-                append("&client_id=${KeycloakConfig.CLIENT_ID}")
-                append("&code=$code")
-                append("&redirect_uri=${java.net.URLEncoder.encode(KeycloakConfig.REDIRECT_URI, "UTF-8")}")
-                append("&code_verifier=$codeVerifier")
-            }
+            val request = Request.Builder()
+                .url(KeycloakConfig.TOKEN_ENDPOINT.toString())
+                .post(formBody)
+                .build()
 
-            Log.d(TAG, "Token exchange request to: $url")
-            Log.d(TAG, "Using code verifier: ${codeVerifier.take(10)}...")
-            connection.outputStream.bufferedWriter().use { it.write(formData) }
+            Log.d(TAG, "Token exchange request to Keycloak")
 
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val response = connection.inputStream.bufferedReader().readText()
-                val json = JSONObject(response)
+            val response = httpClient.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                val json = JSONObject(responseBody)
 
                 val accessToken = json.getString("access_token")
                 val refreshToken = json.optString("refresh_token", null)
@@ -271,18 +276,16 @@ class KeycloakAuthManager @Inject constructor(
                 val expiresIn = json.optLong("expires_in", AppConfig.DEFAULT_TOKEN_EXPIRES_S.toLong())
                 val expiresAt = System.currentTimeMillis() + (expiresIn * 1000)
 
-                Log.d(TAG, "Token exchange successful!")
-                Log.d(TAG, "Access token: ${accessToken.take(20)}...")
-                Log.d(TAG, "Refresh token present: ${refreshToken != null}")
-                Log.d(TAG, "ID token present: ${idToken != null}")
+                Log.d(TAG, "Token exchange successful")
+                // Security: Don't log token values
 
                 // Clear the stored code verifier after successful exchange
                 clearCodeVerifier()
 
                 Result.success(TokenResponse(accessToken, refreshToken, idToken, expiresAt))
             } else {
-                val error = connection.errorStream?.bufferedReader()?.readText() ?: "Token exchange failed"
-                Log.e(TAG, "Token exchange error: ${connection.responseCode} - $error")
+                val error = response.body?.string() ?: "Token exchange failed"
+                Log.e(TAG, "Token exchange error: ${response.code}")
                 Result.failure(Exception(error))
             }
         } catch (e: Exception) {
@@ -293,19 +296,21 @@ class KeycloakAuthManager @Inject constructor(
 
     /**
      * Gets user info from Keycloak
+     * Security: Uses OkHttp instead of HttpURLConnection
      */
     suspend fun getUserInfo(accessToken: String): Result<UserInfo> = withContext(Dispatchers.IO) {
         try {
-            val url = URL(KeycloakConfig.USERINFO_ENDPOINT.toString())
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.setRequestProperty("Authorization", "Bearer $accessToken")
-            connection.connectTimeout = AppConfig.AUTH_TIMEOUT_MS.toInt()
-            connection.readTimeout = AppConfig.AUTH_TIMEOUT_MS.toInt()
+            val request = Request.Builder()
+                .url(KeycloakConfig.USERINFO_ENDPOINT.toString())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
 
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val response = connection.inputStream.bufferedReader().readText()
-                val json = JSONObject(response)
+            val response = httpClient.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                val json = JSONObject(responseBody)
 
                 val userInfo = UserInfo(
                     sub = json.optString("sub"),
@@ -317,11 +322,11 @@ class KeycloakAuthManager @Inject constructor(
                     familyName = json.optString("family_name")
                 )
 
-                Log.d(TAG, "User info: ${userInfo.preferredUsername}")
+                Log.d(TAG, "User info retrieved successfully")
                 Result.success(userInfo)
             } else {
-                val error = connection.errorStream?.bufferedReader()?.readText() ?: "Failed to get user info"
-                Log.e(TAG, "User info error: ${connection.responseCode} - $error")
+                val error = response.body?.string() ?: "Failed to get user info"
+                Log.e(TAG, "User info error: ${response.code}")
                 Result.failure(Exception(error))
             }
         } catch (e: Exception) {
@@ -344,7 +349,7 @@ class KeycloakAuthManager @Inject constructor(
                     "id_token_hint=$idToken&" +
                     "post_logout_redirect_uri=${Uri.encode(KeycloakConfig.POST_LOGOUT_REDIRECT_URI)}"
 
-                Log.d(TAG, "Logout URL: $logoutUrl")
+                // Security: Don't log URLs containing tokens
                 // The actual redirect to Keycloak logout would be done via browser
                 // For mobile app, clearing local tokens is usually sufficient
             }
