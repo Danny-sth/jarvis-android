@@ -27,7 +27,7 @@ class WakeWordManager(
 
     companion object {
         private const val TAG = "WakeWordManager"
-        private const val CUSTOM_KEYWORD_FILENAME = "hey_duq.ppn"
+        private const val CUSTOM_KEYWORD_FILENAME = "hey_duck.ppn"
     }
 
     fun start() {
