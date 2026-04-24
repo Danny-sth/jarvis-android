@@ -63,17 +63,16 @@ fun MainScreen(
         }
     }
 
+    // Track lifecycle state
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isBound by remember { mutableStateOf(false) }
+    var permissionsGranted by remember { mutableStateOf(false) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.values.all { it }) {
-            // Just bind, don't start as foreground service
-            context.bindService(
-                Intent(context, DuqListenerService::class.java),
-                serviceConnection,
-                Context.BIND_AUTO_CREATE
-            )
-        }
+        // Just mark permissions as granted - binding happens in lifecycle observer
+        permissionsGranted = permissions.values.all { it }
     }
 
     // Request permissions on launch
@@ -85,29 +84,49 @@ fun MainScreen(
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    // Track lifecycle to stop service when app goes to background
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var isBound by remember { mutableStateOf(false) }
+    // Start foreground service and bind when permissions are granted
+    LaunchedEffect(permissionsGranted) {
+        if (permissionsGranted && !isBound) {
+            // Start as foreground service for background operation
+            val serviceIntent = Intent(context, DuqListenerService::class.java).apply {
+                action = DuqListenerService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+            // Also bind to get service reference for UI updates
+            context.bindService(
+                Intent(context, DuqListenerService::class.java),
+                serviceConnection,
+                Context.BIND_AUTO_CREATE
+            )
+            isBound = true
+        }
+    }
 
+    // Handle lifecycle events
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> {
-                    if (!isBound) {
+                    // Rebind to get service reference for UI updates
+                    if (permissionsGranted && !isBound) {
                         context.bindService(
                             Intent(context, DuqListenerService::class.java),
                             serviceConnection,
                             Context.BIND_AUTO_CREATE
                         )
                         isBound = true
-                        // Refresh messages when app gains focus
-                        viewModel.refreshMessages()
                     }
+                    // Always refresh messages when app gains focus
+                    viewModel.refreshMessages()
                 }
                 Lifecycle.Event.ON_STOP -> {
+                    // Only unbind, don't stop service - it should keep running for WebSocket
                     if (isBound) {
                         try { context.unbindService(serviceConnection) } catch (_: Exception) {}
-                        context.stopService(Intent(context, DuqListenerService::class.java))
                         isBound = false
                         service = null
                     }
@@ -120,7 +139,7 @@ fun MainScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (isBound) {
                 try { context.unbindService(serviceConnection) } catch (_: Exception) {}
-                context.stopService(Intent(context, DuqListenerService::class.java))
+                // Don't stop service - let it manage its own lifecycle
             }
         }
     }

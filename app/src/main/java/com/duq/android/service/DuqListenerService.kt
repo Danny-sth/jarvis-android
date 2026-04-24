@@ -104,12 +104,18 @@ class DuqListenerService : Service() {
         Log.d(TAG, "onStartCommand: ${intent?.action}")
         when (intent?.action) {
             ACTION_STOP -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_START -> {
+                // Start as foreground service for background operation
+                startForegroundServiceWithNotification()
+                Log.d(TAG, "Started as foreground service")
+            }
         }
-        // Don't start as foreground - only work when app is open
-        return START_NOT_STICKY
+        // Keep service running in background
+        return START_STICKY
     }
 
     private fun startForegroundServiceWithNotification() {
@@ -266,7 +272,8 @@ class DuqListenerService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "duq:wakeword_detection"
         )
-        wakeLock?.acquire(AppConfig.WAKE_LOCK_TIMEOUT_MS)
+        // Acquire indefinitely for background operation (released in onDestroy)
+        wakeLock?.acquire()
     }
 
     private fun releaseWakeLock() {

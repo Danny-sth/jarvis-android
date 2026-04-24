@@ -122,6 +122,10 @@ class DuqWebSocketClient @Inject constructor(
 
         try {
             // Check if token needs refresh
+            val expiresAt = settingsRepository.getTokenExpiresAt()
+            val now = System.currentTimeMillis()
+            Log.d(TAG, "Token check: expiresAt=$expiresAt, now=$now, diff=${(expiresAt - now) / 1000}s")
+
             if (settingsRepository.isTokenExpired()) {
                 Log.d(TAG, "Token expired, attempting refresh...")
                 if (!refreshToken()) {
