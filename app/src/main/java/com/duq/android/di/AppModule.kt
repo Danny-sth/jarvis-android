@@ -16,6 +16,7 @@ import com.duq.android.data.local.Migrations
 import com.duq.android.data.local.dao.ConversationDao
 import com.duq.android.data.local.dao.MessageDao
 import com.duq.android.network.DuqApiClient
+import com.duq.android.network.DuqWebSocketClient
 import com.duq.android.network.TokenRefreshInterceptor
 import com.duq.android.network.VoiceApiClientInterface
 import dagger.Module
@@ -126,5 +127,13 @@ object AppModule {
         messageDao: MessageDao
     ): ConversationRepository {
         return ConversationRepository(apiClient, conversationDao, messageDao)
+    }
+
+    @Provides
+    @Singleton
+    fun provideDuqWebSocketClient(
+        settingsRepository: SettingsRepository
+    ): DuqWebSocketClient {
+        return DuqWebSocketClient(settingsRepository)
     }
 }

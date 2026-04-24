@@ -16,6 +16,7 @@ import com.duq.android.DuqState
 import com.duq.android.config.AppConfig
 import com.duq.android.data.SettingsRepository
 import com.duq.android.error.DuqError
+import com.duq.android.network.DuqWebSocketClient
 import com.duq.android.wakeword.WakeWordManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +41,7 @@ class DuqListenerService : Service() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var notificationManager: DuqNotificationManager
     @Inject lateinit var voiceCommandProcessor: VoiceCommandProcessor
+    @Inject lateinit var webSocketClient: DuqWebSocketClient
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -80,9 +82,22 @@ class DuqListenerService : Service() {
         voiceCommandProcessor.initializePlayer()
         Log.d(TAG, "Acquiring wake lock...")
         acquireWakeLock()
+        Log.d(TAG, "Connecting WebSocket...")
+        connectWebSocket()
         Log.d(TAG, "Initializing wake word detection...")
         initializeWakeWord()
         Log.d(TAG, "═══════════════════════════════════════")
+    }
+
+    private fun connectWebSocket() {
+        serviceScope.launch {
+            try {
+                webSocketClient.connect()
+                Log.d(TAG, "WebSocket connection initiated")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to connect WebSocket: ${e.message}")
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -269,6 +284,8 @@ class DuqListenerService : Service() {
         voiceCommandProcessor.stopRecording()
         Log.d(TAG, "Releasing audio player...")
         voiceCommandProcessor.releasePlayer()
+        Log.d(TAG, "Disconnecting WebSocket...")
+        webSocketClient.disconnect()
         Log.d(TAG, "Releasing wake lock...")
         releaseWakeLock()
         Log.d(TAG, "Cancelling service scope...")

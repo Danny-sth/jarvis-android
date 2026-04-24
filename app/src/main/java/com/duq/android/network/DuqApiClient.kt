@@ -121,6 +121,14 @@ class DuqApiClient(
     }
 
     /**
+     * Result of sending voice command via queue (WebSocket mode)
+     */
+    sealed class SendResult {
+        data class Queued(val taskId: String) : SendResult()
+        data class Error(val message: String, val code: Int? = null) : SendResult()
+    }
+
+    /**
      * Result of token refresh operation
      */
     data class TokenRefreshResult(
@@ -271,6 +279,95 @@ class DuqApiClient(
         Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return result
+    }
+
+    /**
+     * Queue voice command via POST /api/message (WebSocket mode).
+     * Returns task_id immediately - response will come via WebSocket.
+     */
+    suspend fun queueVoiceCommand(
+        authToken: String,
+        audioFile: File,
+        userId: String
+    ): SendResult = withContext(Dispatchers.IO) {
+        try {
+            withRetry {
+                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                Log.d(TAG, "🎤 QUEUE VOICE COMMAND (WebSocket mode)")
+                Log.d(TAG, "Audio file: ${audioFile.name}")
+                Log.d(TAG, "File size: ${audioFile.length()} bytes")
+                Log.d(TAG, "User ID: $userId")
+
+                val audioBytes = audioFile.readBytes()
+                val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+
+                val messageRequest = MessageApiRequest(
+                    userId = userId,
+                    message = "[Voice message]",
+                    isVoice = true,
+                    voiceData = audioBase64,
+                    voiceFormat = "wav",
+                    source = "android"
+                )
+
+                val requestJson = gson.toJson(messageRequest)
+                val requestBody = requestJson.toRequestBody("application/json".toMediaType())
+
+                val request = Request.Builder()
+                    .url("$BASE_URL/api/message")
+                    .addHeader("Authorization", "Bearer $authToken")
+                    .post(requestBody)
+                    .build()
+
+                Log.d(TAG, "📤 Sending to queue...")
+                val response = client.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: "Unknown error"
+                    Log.e(TAG, "❌ Queue request failed: HTTP ${response.code}")
+                    return@withRetry SendResult.Error(errorBody, response.code)
+                }
+
+                val responseBody = response.body?.string() ?: ""
+                val messageResponse = gson.fromJson(responseBody, MessageApiResponse::class.java)
+
+                if (messageResponse.error != null) {
+                    Log.e(TAG, "❌ Queue error: ${messageResponse.error}")
+                    return@withRetry SendResult.Error(messageResponse.error)
+                }
+
+                val taskId = messageResponse.taskId
+                    ?: return@withRetry SendResult.Error("No task_id in response")
+
+                Log.d(TAG, "📋 Task queued: $taskId")
+                Log.d(TAG, "Waiting for WebSocket response...")
+                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+                SendResult.Queued(taskId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Queue voice command exception: ${e.message}")
+            SendResult.Error(e.message ?: "Unknown error")
+        }
+    }
+
+    /**
+     * Poll for a specific task result (public method for WebSocket fallback).
+     * Used when WebSocket times out but task was already queued.
+     */
+    suspend fun pollForTask(
+        authToken: String,
+        taskId: String
+    ): ApiResult = withContext(Dispatchers.IO) {
+        try {
+            withRetry {
+                Log.d(TAG, "Polling for task: $taskId")
+                pollForTaskResult(authToken, taskId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Poll for task exception: ${e.message}")
+            ApiResult.Error(e.message ?: "Unknown error")
+        }
     }
 
     /**
