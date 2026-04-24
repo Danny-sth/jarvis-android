@@ -87,12 +87,14 @@ class VoiceCommandProcessor @Inject constructor(
             Log.d(TAG, "→ STATE: PROCESSING")
             callback.onStateChanged(DuqState.PROCESSING)
 
-            Log.d(TAG, "Getting access token...")
+            Log.d(TAG, "Getting access token and user ID...")
             val authToken = settingsRepository.accessToken.first()
+            val userId = settingsRepository.userSub.first()
             Log.d(TAG, "Token retrieved: ${authToken.take(20)}...")
+            Log.d(TAG, "User ID: $userId")
 
             Log.d(TAG, "Sending voice command to API...")
-            val result = apiClient.sendVoiceCommand("", authToken, audioFile)
+            val result = apiClient.sendVoiceCommand("", authToken, audioFile, userId)
 
             when (result) {
                 is DuqApiClient.ApiResult.Success -> {

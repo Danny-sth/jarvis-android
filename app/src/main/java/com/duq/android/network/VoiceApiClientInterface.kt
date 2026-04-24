@@ -6,6 +6,7 @@ interface VoiceApiClientInterface {
     suspend fun sendVoiceCommand(
         serverUrl: String,
         authToken: String,
-        audioFile: File
+        audioFile: File,
+        userId: String = ""  // Keycloak sub or telegram_id
     ): DuqApiClient.ApiResult
 }

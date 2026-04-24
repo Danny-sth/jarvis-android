@@ -182,11 +182,12 @@ class DuqApiClient(
     override suspend fun sendVoiceCommand(
         serverUrl: String,
         authToken: String,
-        audioFile: File
+        audioFile: File,
+        userId: String
     ): ApiResult = withContext(Dispatchers.IO) {
         try {
             withRetry {
-                sendVoiceCommandInternal(authToken, audioFile)
+                sendVoiceCommandViaQueue(authToken, audioFile, userId)
             }
         } catch (e: IOException) {
             Log.e(TAG, "❌ NETWORK ERROR after retries")
@@ -199,78 +200,150 @@ class DuqApiClient(
         }
     }
 
-    private fun sendVoiceCommandInternal(authToken: String, audioFile: File): ApiResult {
+    /**
+     * Send voice command via queue-based API:
+     * 1. POST /api/message with base64 audio
+     * 2. Poll GET /api/task/{id} for result
+     */
+    private suspend fun sendVoiceCommandViaQueue(
+        authToken: String,
+        audioFile: File,
+        userId: String
+    ): ApiResult {
         Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        Log.d(TAG, "🎤 VOICE COMMAND START")
+        Log.d(TAG, "🎤 VOICE COMMAND START (Queue API)")
         Log.d(TAG, "Audio file: ${audioFile.name}")
         Log.d(TAG, "File size: ${audioFile.length()} bytes (${audioFile.length() / 1024}KB)")
-        Log.d(TAG, "URL: $BASE_URL/api/voice")
-        // Security: Don't log auth tokens
+        Log.d(TAG, "User ID: $userId")
+        Log.d(TAG, "URL: $BASE_URL/api/message")
 
-        val mediaType = "audio/wav".toMediaType()
-        val requestBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "audio",
-                audioFile.name,
-                audioFile.asRequestBody(mediaType)
-            )
-            .build()
+        val startTime = System.currentTimeMillis()
 
-        val url = "$BASE_URL/api/voice"
+        // Step 1: Convert audio to base64
+        val audioBytes = audioFile.readBytes()
+        val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+        Log.d(TAG, "Audio base64 length: ${audioBase64.length} chars")
+
+        // Step 2: Send POST /api/message
+        val messageRequest = MessageApiRequest(
+            userId = userId,
+            message = "[Voice message]",  // Placeholder, Duq will transcribe
+            isVoice = true,
+            voiceData = audioBase64,
+            voiceFormat = "wav",
+            source = "android"
+        )
+
+        val requestJson = gson.toJson(messageRequest)
+        val requestBody = requestJson.toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
-            .url(url)
+            .url("$BASE_URL/api/message")
             .addHeader("Authorization", "Bearer $authToken")
             .post(requestBody)
             .build()
 
-        Log.d(TAG, "📤 Uploading audio...")
-        val startTime = System.currentTimeMillis()
-
+        Log.d(TAG, "📤 Sending to queue...")
         val response = client.newCall(request).execute()
-        val duration = System.currentTimeMillis() - startTime
 
-        Log.d(TAG, "📥 Response received in ${duration}ms")
-        Log.d(TAG, "Status: ${response.code} ${response.message}")
-
-        if (response.isSuccessful) {
-            val body = response.body?.string()
-            if (body != null && body.isNotEmpty()) {
-                Log.d(TAG, "Response body length: ${body.length} chars")
-
-                val json = JSONObject(body)
-                val text = json.optString("text", "")
-                val audioBase64 = json.optString("audio", "")
-
-                Log.d(TAG, "Response text: \"${text.take(100)}${if (text.length > 100) "..." else ""}\"")
-                Log.d(TAG, "Audio base64 length: ${audioBase64.length} chars")
-
-                if (audioBase64.isNotEmpty()) {
-                    val audioBytes = Base64.decode(audioBase64, Base64.DEFAULT)
-                    Log.d(TAG, "✅ VOICE COMMAND SUCCESS")
-                    Log.d(TAG, "Decoded audio: ${audioBytes.size} bytes (${audioBytes.size / 1024}KB)")
-                    Log.d(TAG, "Total time: ${duration}ms")
-                    Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    return ApiResult.Success(audioBytes, text)
-                } else {
-                    Log.e(TAG, "❌ No audio in response")
-                    Log.e(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    return ApiResult.Error("No audio in response")
-                }
-            } else {
-                Log.e(TAG, "❌ Empty response from server")
-                Log.e(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                return ApiResult.Error("Empty response from server")
-            }
-        } else {
+        if (!response.isSuccessful) {
             val errorBody = response.body?.string() ?: "Unknown error"
-            Log.e(TAG, "❌ VOICE COMMAND FAILED")
-            Log.e(TAG, "HTTP ${response.code}: ${response.message}")
+            Log.e(TAG, "❌ Queue request failed: HTTP ${response.code}")
             Log.e(TAG, "Error: $errorBody")
-            Log.e(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             return ApiResult.Error(errorBody, response.code)
         }
+
+        val responseBody = response.body?.string() ?: ""
+        val messageResponse = gson.fromJson(responseBody, MessageApiResponse::class.java)
+
+        if (messageResponse.error != null) {
+            Log.e(TAG, "❌ Queue error: ${messageResponse.error}")
+            return ApiResult.Error(messageResponse.error)
+        }
+
+        val taskId = messageResponse.taskId ?: return ApiResult.Error("No task_id in response")
+        Log.d(TAG, "📋 Task queued: $taskId")
+
+        // Step 3: Poll for result
+        val result = pollForTaskResult(authToken, taskId)
+        val totalTime = System.currentTimeMillis() - startTime
+        Log.d(TAG, "Total time: ${totalTime}ms")
+        Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        return result
+    }
+
+    /**
+     * Poll GET /api/task/{id} until result is ready
+     */
+    private suspend fun pollForTaskResult(
+        authToken: String,
+        taskId: String,
+        maxAttempts: Int = 60,  // 60 * 1s = 60s timeout
+        pollIntervalMs: Long = 1000
+    ): ApiResult {
+        Log.d(TAG, "⏳ Polling for task result: $taskId")
+
+        repeat(maxAttempts) { attempt ->
+            val request = Request.Builder()
+                .url("$BASE_URL/api/task/$taskId")
+                .addHeader("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Poll attempt ${attempt + 1}: HTTP ${response.code}")
+                delay(pollIntervalMs)
+                return@repeat
+            }
+
+            val body = response.body?.string() ?: ""
+            val taskStatus = gson.fromJson(body, TaskStatusResponse::class.java)
+
+            Log.d(TAG, "Poll attempt ${attempt + 1}: status=${taskStatus.status}")
+
+            when (taskStatus.status.uppercase()) {
+                "COMPLETED", "SUCCESS" -> {
+                    val taskResponse = taskStatus.response
+                    if (taskResponse != null) {
+                        val text = taskResponse.text ?: ""
+                        val audioBase64 = taskResponse.audio
+
+                        if (audioBase64 != null && audioBase64.isNotEmpty()) {
+                            val audioBytes = Base64.decode(audioBase64, Base64.DEFAULT)
+                            Log.d(TAG, "✅ VOICE COMMAND SUCCESS")
+                            Log.d(TAG, "Response text: \"${text.take(100)}${if (text.length > 100) "..." else ""}\"")
+                            Log.d(TAG, "Audio: ${audioBytes.size} bytes")
+                            return ApiResult.Success(audioBytes, text)
+                        } else {
+                            Log.d(TAG, "✅ Text-only response (no audio)")
+                            return ApiResult.Success(ByteArray(0), text)
+                        }
+                    } else {
+                        Log.e(TAG, "❌ No response data in completed task")
+                        return ApiResult.Error("No response data")
+                    }
+                }
+                "FAILED", "ERROR" -> {
+                    val error = taskStatus.error ?: "Task failed"
+                    Log.e(TAG, "❌ Task failed: $error")
+                    return ApiResult.Error(error)
+                }
+                "PENDING", "PROCESSING", "QUEUED" -> {
+                    // Still processing, continue polling
+                    delay(pollIntervalMs)
+                }
+                else -> {
+                    Log.w(TAG, "Unknown status: ${taskStatus.status}")
+                    delay(pollIntervalMs)
+                }
+            }
+        }
+
+        Log.e(TAG, "❌ Polling timeout after $maxAttempts attempts")
+        return ApiResult.Error("Request timeout")
     }
 
     /**

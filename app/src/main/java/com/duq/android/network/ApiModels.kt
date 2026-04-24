@@ -29,3 +29,33 @@ data class MessageResponse(
 data class CreateConversationRequest(
     @SerializedName("title") val title: String?
 )
+
+// Unified Message API (POST /api/message)
+data class MessageApiRequest(
+    @SerializedName("user_id") val userId: String,
+    @SerializedName("message") val message: String,
+    @SerializedName("is_voice") val isVoice: Boolean = false,
+    @SerializedName("voice_data") val voiceData: String? = null,  // Base64 encoded audio
+    @SerializedName("voice_format") val voiceFormat: String? = null,  // wav, ogg, mp3
+    @SerializedName("source") val source: String = "android"
+)
+
+data class MessageApiResponse(
+    @SerializedName("task_id") val taskId: String?,
+    @SerializedName("status") val status: String?,
+    @SerializedName("error") val error: String?
+)
+
+// Task Status API (GET /api/task/{id})
+data class TaskStatusResponse(
+    @SerializedName("task_id") val taskId: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("response") val response: TaskResponseData?,
+    @SerializedName("error") val error: String?
+)
+
+data class TaskResponseData(
+    @SerializedName("text") val text: String?,
+    @SerializedName("audio") val audio: String?,  // Base64 encoded audio
+    @SerializedName("audio_format") val audioFormat: String?
+)
