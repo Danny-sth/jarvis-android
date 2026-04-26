@@ -20,9 +20,9 @@ data class MessageResponse(
     @SerializedName("conversation_id") val conversationId: String,
     @SerializedName("role") val role: String,
     @SerializedName("content") val content: String,
-    @SerializedName("has_audio") val hasAudio: Boolean,
-    @SerializedName("audio_duration_ms") val audioDurationMs: Int?,
-    @SerializedName("waveform") val waveform: List<Float>?,
+    @SerializedName("has_audio") val hasAudio: Boolean = false,
+    @SerializedName("audio_duration_ms") val audioDurationMs: Int? = null,
+    @SerializedName("waveform") val waveform: List<Float>? = null,
     @SerializedName("created_at") val createdAt: Long
 )
 

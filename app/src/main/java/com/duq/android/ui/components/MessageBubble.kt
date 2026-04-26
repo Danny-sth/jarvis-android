@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.duq.android.audio.PlaybackState
 import com.duq.android.data.model.Message
 import com.duq.android.data.model.MessageRole
 import com.duq.android.ui.theme.DuqColors
@@ -29,16 +30,23 @@ import java.time.format.DateTimeFormatter
  * - Glass-like translucent backgrounds
  * - Subtle gradient borders
  * - Streaming text support for AI responses
+ * - Audio playback controls for voice messages
  *
  * @param message The message to display
  * @param isStreaming Whether AI response is currently streaming
+ * @param audioPlaybackState Current audio playback state for this message
+ * @param audioProgress Playback progress (0.0-1.0)
+ * @param onAudioPlayPauseClick Callback when audio play/pause is clicked
  * @param modifier Modifier for the component
  */
 @Composable
 fun MessageBubble(
     message: Message,
     modifier: Modifier = Modifier,
-    isStreaming: Boolean = false
+    isStreaming: Boolean = false,
+    audioPlaybackState: AudioPlaybackState = AudioPlaybackState.IDLE,
+    audioProgress: Float = 0f,
+    onAudioPlayPauseClick: () -> Unit = {}
 ) {
     val isUser = message.role == MessageRole.USER
     val alignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
@@ -127,6 +135,16 @@ fun MessageBubble(
                     lineHeight = 21.sp,
                     color = DuqColors.textPrimary,
                     fontWeight = FontWeight.Normal
+                )
+            }
+
+            // Audio playback controls for voice messages
+            if (message.hasAudio) {
+                AudioMessageControls(
+                    state = audioPlaybackState,
+                    durationMs = message.audioDurationMs,
+                    progress = audioProgress,
+                    onPlayPauseClick = onAudioPlayPauseClick
                 )
             }
 

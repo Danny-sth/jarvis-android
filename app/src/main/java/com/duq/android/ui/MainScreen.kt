@@ -47,6 +47,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.duq.android.DuqState
+import com.duq.android.audio.ChatAudioPlaybackManager
+import com.duq.android.audio.PlaybackInfo
 import com.duq.android.config.AppConfig
 import com.duq.android.error.DuqError
 import com.duq.android.service.DuqListenerService
@@ -59,7 +61,8 @@ import com.duq.android.ui.theme.DuqColors
 @Composable
 fun MainScreen(
     onNavigateToSettings: () -> Unit,
-    viewModel: ConversationViewModel = hiltViewModel()
+    viewModel: ConversationViewModel = hiltViewModel(),
+    audioPlaybackManager: ChatAudioPlaybackManager
 ) {
     val context = LocalContext.current
     var voiceController by remember { mutableStateOf<VoiceServiceController?>(null) }
@@ -71,6 +74,9 @@ fun MainScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val conversations by viewModel.conversations.collectAsState()
     val currentConversation by viewModel.currentConversation.collectAsState()
+
+    // Audio playback state
+    val audioPlaybackInfo by audioPlaybackManager.playbackInfo.collectAsState()
 
     // Text input state
     var textInput by remember { mutableStateOf("") }
@@ -365,6 +371,10 @@ fun MainScreen(
             MessagesList(
                 messages = messages,
                 isLoading = isLoading,
+                audioPlaybackInfo = audioPlaybackInfo,
+                onAudioPlayPauseClick = { messageId ->
+                    audioPlaybackManager.playOrToggle(messageId)
+                },
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 8.dp)
