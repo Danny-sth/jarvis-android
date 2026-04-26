@@ -238,6 +238,13 @@ class ConversationViewModel @Inject constructor(
 
                 Log.d(TAG, "Sending text message: ${message.take(50)}...")
 
+                // Optimistic update: show user message immediately
+                val conversationId = _currentConversationId.value
+                if (conversationId != null) {
+                    conversationRepository.insertLocalMessage(conversationId, message, "user")
+                    Log.d(TAG, "✅ Optimistic update: user message added to UI")
+                }
+
                 when (val result = duqApiClient.queueTextMessage(authToken, message, userId)) {
                     is DuqApiClient.SendResult.Queued -> {
                         Log.d(TAG, "Message queued with task_id: ${result.taskId}")

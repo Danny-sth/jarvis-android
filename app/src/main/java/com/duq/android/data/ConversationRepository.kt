@@ -187,6 +187,31 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Insert a local message for optimistic UI update.
+     * Uses negative ID to avoid conflicts with server-generated IDs.
+     * The message will be replaced when refreshMessages() fetches the real one.
+     */
+    suspend fun insertLocalMessage(
+        conversationId: String,
+        content: String,
+        role: String = "user"
+    ) {
+        val tempId = -System.currentTimeMillis() // Negative ID to avoid conflicts
+        val entity = MessageEntity(
+            id = tempId,
+            conversationId = conversationId,
+            role = role,
+            content = content,
+            hasAudio = false,
+            audioDurationMs = null,
+            waveform = null,
+            createdAt = System.currentTimeMillis() / 1000
+        )
+        messageDao.insertMessage(entity)
+        Log.d(TAG, "Inserted local message with temp id: $tempId")
+    }
+
+    /**
      * Download and cache audio for a message
      */
     suspend fun downloadAndCacheAudio(
