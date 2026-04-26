@@ -241,7 +241,23 @@ class ConversationViewModel @Inject constructor(
                 when (val result = duqApiClient.queueTextMessage(authToken, message, userId)) {
                     is DuqApiClient.SendResult.Queued -> {
                         Log.d(TAG, "Message queued with task_id: ${result.taskId}")
-                        // Response will come via WebSocket, then refresh messages
+
+                        // Poll for task completion
+                        Log.d(TAG, "Polling for task result...")
+                        val pollResult = duqApiClient.pollForTask(authToken, result.taskId)
+
+                        when (pollResult) {
+                            is DuqApiClient.ApiResult.Success -> {
+                                Log.d(TAG, "✅ Task completed, refreshing messages")
+                            }
+                            is DuqApiClient.ApiResult.Error -> {
+                                Log.e(TAG, "Task failed: ${pollResult.message}")
+                                _error.value = DuqError.NetworkError(pollResult.message)
+                            }
+                        }
+
+                        // Refresh messages to show user message and response
+                        refreshMessages()
                     }
                     is DuqApiClient.SendResult.Error -> {
                         Log.e(TAG, "Failed to send message: ${result.message}")
